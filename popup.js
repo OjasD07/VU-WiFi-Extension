@@ -3,6 +3,8 @@
 
   const SETTINGS_KEY = "vuSettings";
   const STATUS_KEY = "vuLastStatus";
+  const CONSENT_KEY = "vuConsent";
+  const CONSENT_VERSION = "1.0.0";
 
   const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -23,6 +25,8 @@
 
   let settings = { ...DEFAULT_SETTINGS };
   let currentStatus = { ...DEFAULT_STATUS };
+  let consent = normalizeConsent(null);
+  let hasStoredSettings = false;
   let activeTab = null;
   let saveButtonTimer = 0;
   let triggerButtonTimer = 0;
@@ -36,17 +40,22 @@
     cacheElements();
     bindEvents();
 
-    const stored = await storageGet([SETTINGS_KEY, STATUS_KEY]);
-    const hasStoredSettings = stored[SETTINGS_KEY] && typeof stored[SETTINGS_KEY] === "object";
+    elements.copyrightYear.textContent = String(new Date().getFullYear());
+
+    const stored = await storageGet([SETTINGS_KEY, STATUS_KEY, CONSENT_KEY]);
+    const storedHasSettings = Boolean(stored[SETTINGS_KEY] && typeof stored[SETTINGS_KEY] === "object");
 
     settings = normalizeSettings(stored[SETTINGS_KEY]);
     currentStatus = normalizeStatus(stored[STATUS_KEY]);
+    consent = normalizeConsent(stored[CONSENT_KEY]);
+    hasStoredSettings = storedHasSettings;
 
     renderSettings();
     renderStatus();
+    renderConsent();
 
-    if (!hasStoredSettings) {
-      await storageSet({ [SETTINGS_KEY]: settings });
+    if (!hasStoredSettings && consent.accepted) {
+      await ensureDefaultSettings();
     }
 
     await refreshActiveTab();
@@ -70,6 +79,10 @@
     elements.formMessage = document.getElementById("formMessage");
     elements.connectionBadge = document.getElementById("connectionBadge");
     elements.badgeText = document.getElementById("badgeText");
+    elements.consentGate = document.getElementById("consentGate");
+    elements.consentGateTitle = document.getElementById("consentGateTitle");
+    elements.consentGateText = document.getElementById("consentGateText");
+    elements.consentGateLink = document.getElementById("consentGateLink");
     elements.statusReadout = document.getElementById("statusReadout");
     elements.statusText = document.getElementById("statusText");
     elements.lastUpdated = document.getElementById("lastUpdated");
@@ -77,6 +90,7 @@
     elements.triggerLabel = elements.triggerButton.querySelector(".trigger-label");
     elements.eyeOn = elements.togglePassword.querySelector(".icon-eye");
     elements.eyeOff = elements.togglePassword.querySelector(".icon-eye-off");
+    elements.copyrightYear = document.getElementById("copyrightYear");
   }
 
   function bindEvents() {
@@ -102,6 +116,11 @@
     const password = elements.password.value;
 
     clearFormMessage();
+
+    if (!consent.accepted) {
+      showFormMessage("Accept the privacy & terms before saving credentials.", "error");
+      return;
+    }
 
     if (!username || !password) {
       showFormMessage("Enter both a username and password.", "error");
@@ -132,6 +151,12 @@
   }
 
   async function persistToggle(key, value) {
+    if (!consent.accepted) {
+      renderConsent();
+      showFormMessage("Accept the privacy & terms first.", "error");
+      return;
+    }
+
     const nextSettings = normalizeSettings({ ...settings, [key]: value });
     settings = nextSettings;
 
@@ -187,6 +212,36 @@
     elements.username.value = settings.username;
     elements.password.value = settings.password;
     elements.autoAccept.checked = settings.autoAcceptTerms;
+  }
+
+  function renderConsent() {
+    const locked = !consent.accepted;
+
+    document.body.classList.toggle("is-consent-locked", locked);
+    elements.consentGate.hidden = !locked;
+
+    if (locked) {
+      elements.consentGateTitle.textContent = consent.outdated
+        ? "Privacy & terms updated"
+        : "Privacy & terms required";
+      elements.consentGateText.textContent = consent.outdated
+        ? "Review the updated terms to keep automation active."
+        : "Review and agree to enable automation.";
+    }
+
+    elements.enableToggle.disabled = locked;
+    elements.username.disabled = locked;
+    elements.password.disabled = locked;
+    elements.togglePassword.disabled = locked;
+    elements.autoAccept.disabled = locked;
+    elements.saveButton.disabled = locked;
+
+    syncTriggerButtonState();
+  }
+
+  function syncTriggerButtonState() {
+    const loading = elements.triggerButton.classList.contains("is-loading");
+    elements.triggerButton.disabled = loading || !consent.accepted;
   }
 
   function renderStatus() {
@@ -252,6 +307,12 @@
 
   async function triggerLogin() {
     if (elements.triggerButton.disabled) return;
+
+    if (!consent.accepted) {
+      renderConsent();
+      showFormMessage("Accept the privacy & terms before triggering automation.", "error");
+      return;
+    }
 
     window.clearTimeout(triggerButtonTimer);
     setTriggerLoading(true);
@@ -320,8 +381,8 @@
   }
 
   function setTriggerLoading(loading) {
-    elements.triggerButton.disabled = loading;
     elements.triggerButton.classList.toggle("is-loading", loading);
+    syncTriggerButtonState();
     if (loading) {
       elements.triggerButton.classList.remove("is-feedback");
       elements.triggerLabel.textContent = "Triggering…";
@@ -364,16 +425,36 @@
   function handleStorageChange(changes, areaName) {
     if (areaName !== "local") return;
 
+    if (changes[CONSENT_KEY]) {
+      const wasAccepted = consent.accepted;
+      consent = normalizeConsent(changes[CONSENT_KEY].newValue);
+      renderConsent();
+
+      if (!wasAccepted && consent.accepted) {
+        void ensureDefaultSettings();
+        showFormMessage("Privacy & terms accepted. Automation is ready.", "success");
+        void refreshActiveTab();
+      } else if (wasAccepted && !consent.accepted) {
+        showFormMessage("Consent withdrawn. Automation is paused.", "error");
+      }
+    }
+
     if (changes[STATUS_KEY]?.newValue) {
       currentStatus = normalizeStatus(changes[STATUS_KEY].newValue);
       renderStatus();
     }
 
     if (changes[SETTINGS_KEY]?.newValue) {
+      hasStoredSettings = true;
       settings = normalizeSettings(changes[SETTINGS_KEY].newValue);
       elements.enableToggle.checked = settings.enabled;
       elements.autoAccept.checked = settings.autoAcceptTerms;
     }
+  }
+
+  async function ensureDefaultSettings() {
+    if (hasStoredSettings) return;
+    hasStoredSettings = await storageSet({ [SETTINGS_KEY]: settings });
   }
 
   function handleRuntimeMessage(message) {
@@ -398,6 +479,30 @@
         : DEFAULT_SETTINGS.password,
       autoAcceptTerms: raw.autoAcceptTerms !== false
     };
+  }
+
+  function normalizeConsent(raw) {
+    const acceptedFlag = Boolean(raw && typeof raw === "object" && raw.accepted === true);
+
+    return {
+      accepted: isConsentValid(raw),
+      outdated: acceptedFlag && !isConsentValid(raw),
+      version: raw && typeof raw === "object" && typeof raw.version === "string" ? raw.version : "",
+      acceptedAt: raw && typeof raw === "object" && Number.isFinite(Number(raw.acceptedAt))
+        ? Number(raw.acceptedAt)
+        : 0
+    };
+  }
+
+  function isConsentValid(raw) {
+    return Boolean(
+      raw
+      && typeof raw === "object"
+      && raw.accepted === true
+      && raw.version === CONSENT_VERSION
+      && Number.isFinite(Number(raw.acceptedAt))
+      && Number(raw.acceptedAt) > 0
+    );
   }
 
   function normalizeStatus(raw) {

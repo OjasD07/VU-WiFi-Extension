@@ -5,6 +5,8 @@
   const GLOBAL_KEY = "__vuWifiAutoLoginV1";
   const SETTINGS_KEY = "vuSettings";
   const STATUS_KEY = "vuLastStatus";
+  const CONSENT_KEY = "vuConsent";
+  const CONSENT_VERSION = "1.0.0";
 
   const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -32,7 +34,9 @@
 
   const state = {
     settings: { ...DEFAULT_SETTINGS },
+    consentGranted: false,
     initialized: false,
+    initialScanStarted: false,
     observer: null,
     observerPermanent: false,
     warmupTimer: 0,
@@ -93,28 +97,57 @@
 
   try {
     chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName !== "local" || !changes[SETTINGS_KEY]) {
+      if (areaName !== "local") {
         return;
       }
 
-      const wasEnabled = state.settings.enabled;
-      state.settings = normalizeSettings(changes[SETTINGS_KEY].newValue);
+      if (changes[SETTINGS_KEY]) {
+        const wasEnabled = state.settings.enabled;
+        state.settings = normalizeSettings(changes[SETTINGS_KEY].newValue);
 
-      if (!state.settings.enabled) {
-        stopObserver();
+        if (!state.settings.enabled) {
+          stopObserver();
+        } else if (
+          state.consentGranted
+          && !wasEnabled
+          && state.initialized
+        ) {
+          window.setTimeout(() => {
+            if (!state.consentGranted || !state.settings.enabled) {
+              return;
+            }
+
+            const assessment = assessPage();
+            if (assessment.portal) {
+              activatePortal(assessment);
+              scanPage("settings-enabled");
+            } else {
+              beginWarmupIfUseful(assessment);
+            }
+          }, 60);
+        }
+      }
+
+      if (!changes[CONSENT_KEY]) {
         return;
       }
 
-      if (!wasEnabled && state.initialized) {
-        window.setTimeout(() => {
-          const assessment = assessPage();
-          if (assessment.portal) {
-            activatePortal(assessment);
-            scanPage("settings-enabled");
-          } else {
-            beginWarmupIfUseful(assessment);
-          }
-        }, 60);
+      const wasGranted = state.consentGranted;
+      state.consentGranted = isConsentValid(changes[CONSENT_KEY].newValue);
+
+      if (!state.consentGranted) {
+        suspendAutomation();
+        if (wasGranted) {
+          publishStatus("Privacy & terms consent required · automation paused", "warning", "consent", {
+            portal: false,
+            keepalive: false
+          });
+        }
+        return;
+      }
+
+      if (!wasGranted && state.initialized) {
+        startInitialScan();
       }
     });
   } catch {
@@ -140,6 +173,17 @@
         : DEFAULT_SETTINGS.password,
       autoAcceptTerms: raw.autoAcceptTerms !== false
     };
+  }
+
+  function isConsentValid(raw) {
+    return Boolean(
+      raw
+      && typeof raw === "object"
+      && raw.accepted === true
+      && raw.version === CONSENT_VERSION
+      && Number.isFinite(Number(raw.acceptedAt))
+      && Number(raw.acceptedAt) > 0
+    );
   }
 
   function compact(value) {
@@ -410,6 +454,7 @@
       target: isTargetHost(),
       keepalive: Boolean(state.keepalivePage),
       enabled: Boolean(state.settings.enabled),
+      consent: Boolean(state.consentGranted),
       url: window.location.href,
       action: state.lastStatus?.kind || "idle",
       message: state.lastStatus?.message || "",
@@ -422,6 +467,12 @@
     const stored = await storageGet(SETTINGS_KEY);
     state.settings = normalizeSettings(stored[SETTINGS_KEY]);
     return state.settings;
+  }
+
+  async function loadConsent() {
+    const stored = await storageGet(CONSENT_KEY);
+    state.consentGranted = isConsentValid(stored[CONSENT_KEY]);
+    return state.consentGranted;
   }
 
   // ---------------------------------------------------------------------------
@@ -522,14 +573,14 @@
     state.portalActive = true;
     state.keepalivePage = Boolean(assessment.keepalivePage);
 
-    if (state.settings.enabled) {
+    if (state.consentGranted && state.settings.enabled) {
       state.observerPermanent = true;
       startObserver();
     }
   }
 
   function beginWarmupIfUseful(assessment) {
-    if (!state.settings.enabled || state.observerPermanent) {
+    if (!state.consentGranted || !state.settings.enabled || state.observerPermanent) {
       return;
     }
 
@@ -1238,7 +1289,7 @@
   // ---------------------------------------------------------------------------
 
   function scheduleScan(reason, delay = MUTATION_DELAY) {
-    if (!state.settings.enabled) {
+    if (!state.consentGranted || !state.settings.enabled) {
       return;
     }
 
@@ -1254,6 +1305,15 @@
   }
 
   function performPageAction(assessment, options = {}) {
+    if (!state.consentGranted) {
+      return {
+        executed: false,
+        action: "none",
+        reason: "consent-required",
+        message: "Privacy & terms consent required"
+      };
+    }
+
     if (state.actionLock) {
       return { executed: false, action: "none", reason: "busy", message: "Automation is busy" };
     }
@@ -1314,6 +1374,10 @@
   }
 
   function scanPage(reason = "scan") {
+    if (!state.consentGranted) {
+      return { executed: false, reason: "consent-required" };
+    }
+
     if (!document.body) {
       return { executed: false, reason: "no-body" };
     }
@@ -1335,13 +1399,13 @@
   }
 
   function startObserver(temporary = false) {
-    if (!state.settings.enabled) {
+    if (!state.consentGranted || !state.settings.enabled) {
       return;
     }
 
     if (!document.body) {
       document.addEventListener("DOMContentLoaded", () => {
-        if (state.settings.enabled) startObserver(temporary);
+        if (state.consentGranted && state.settings.enabled) startObserver(temporary);
       }, { once: true });
       return;
     }
@@ -1395,8 +1459,32 @@
     state.observerPermanent = false;
   }
 
+  function suspendAutomation() {
+    stopObserver();
+    state.portalActive = false;
+    state.keepalivePage = false;
+    state.portalAnnounced = false;
+    state.loginSubmitted = false;
+    state.keepaliveClicked = false;
+    state.termsAccepted = false;
+    state.initialScanStarted = false;
+    state.lastAssessment = null;
+  }
+
   async function handleManualTrigger() {
     await readyPromise;
+
+    if (!state.consentGranted) {
+      return {
+        ok: false,
+        executed: false,
+        action: "none",
+        reason: "consent-required",
+        message: "Accept the privacy & terms to use automation.",
+        consentRequired: true,
+        pageState: buildPageState()
+      };
+    }
 
     if (!document.body) {
       return {
@@ -1480,12 +1568,37 @@
       state.settings = { ...DEFAULT_SETTINGS };
     }
 
+    try {
+      await loadConsent();
+    } catch {
+      state.consentGranted = false;
+    }
+
     state.initialized = true;
     resolveReady();
+    installPageListeners();
 
-    if (!state.settings.enabled) {
+    if (!state.consentGranted) {
       return;
     }
+
+    startInitialScan();
+  }
+
+  function installPageListeners() {
+    window.addEventListener("hashchange", () => scheduleScan("hashchange", 180));
+    window.addEventListener("popstate", () => scheduleScan("popstate", 180));
+    window.addEventListener("pageshow", (event) => {
+      if (event.persisted) scheduleScan("pageshow", 250);
+    });
+  }
+
+  function startInitialScan() {
+    if (!state.consentGranted || !state.settings.enabled || state.initialScanStarted) {
+      return;
+    }
+
+    state.initialScanStarted = true;
 
     const assessment = assessPage();
     if (assessment.portal) {
@@ -1499,9 +1612,10 @@
     // qualify for the short-lived warmup observer.
     for (const delay of [1200, 3500, 7000]) {
       window.setTimeout(() => {
-        if (!state.settings.enabled || state.observer || state.portalActive) {
+        if (!state.consentGranted || !state.settings.enabled || state.observer || state.portalActive) {
           return;
         }
+
         const lateAssessment = assessPage();
         if (lateAssessment.portal) {
           activatePortal(lateAssessment);
@@ -1511,12 +1625,6 @@
         }
       }, delay);
     }
-
-    window.addEventListener("hashchange", () => scheduleScan("hashchange", 180));
-    window.addEventListener("popstate", () => scheduleScan("popstate", 180));
-    window.addEventListener("pageshow", (event) => {
-      if (event.persisted) scheduleScan("pageshow", 250);
-    });
   }
 
   const publicApi = Object.freeze({

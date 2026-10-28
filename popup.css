@@ -181,6 +181,70 @@ svg {
   }
 }
 
+.consent-gate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px 9px 12px;
+  margin-bottom: 8px;
+  background: rgba(245, 158, 11, 0.065);
+  border: 1px solid rgba(245, 158, 11, 0.26);
+  border-radius: var(--radius-card);
+}
+
+.consent-gate-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.consent-gate-title {
+  color: #fcd34d;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.consent-gate-text {
+  color: var(--muted);
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
+.consent-gate-link {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  justify-content: center;
+  min-height: 25px;
+  padding: 0 9px;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  font-size: 9.5px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  transition: background 140ms ease, border-color 140ms ease, transform 120ms ease;
+}
+
+.consent-gate-link:hover {
+  background: var(--accent-bright);
+  border-color: var(--accent-bright);
+}
+
+.consent-gate-link:active {
+  transform: translateY(1px);
+}
+
+.consent-gate-link:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.62);
+  outline-offset: 2px;
+}
+
 .card {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.014), transparent 65%), var(--surface);
   border: 1px solid var(--border);
@@ -264,6 +328,11 @@ svg {
 .switch input:checked + .switch-track .switch-thumb {
   background: #f0fdf7;
   transform: translateX(16px);
+}
+
+.switch input:disabled + .switch-track {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .switch input:focus-visible + .switch-track {
@@ -354,6 +423,12 @@ svg {
   box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
 }
 
+.field input:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
 .password-wrap {
   position: relative;
 }
@@ -389,6 +464,11 @@ svg {
 .icon-button[aria-pressed="true"] {
   color: var(--text-secondary);
   background: rgba(255, 255, 255, 0.045);
+}
+
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .icon-button:focus-visible {
@@ -448,6 +528,11 @@ svg {
   transform: scale(1);
 }
 
+.checkbox-row input:disabled + .checkmark {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .checkbox-row input:focus-visible + .checkmark {
   outline: 2px solid rgba(52, 211, 153, 0.62);
   outline-offset: 2px;
@@ -493,6 +578,11 @@ svg {
 .button:disabled {
   cursor: wait;
   opacity: 0.72;
+}
+
+.is-consent-locked .button:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
 }
 
 .button-primary {
@@ -662,12 +752,32 @@ svg {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   margin-top: 10px;
   color: #52525b;
   font-size: 8.5px;
-  line-height: 1.3;
+  line-height: 1.4;
   letter-spacing: 0.01em;
+  text-align: center;
+}
+
+.footer a {
+  color: #85858f;
+  border-radius: 3px;
+  text-decoration: none;
+  transition: color 140ms ease;
+}
+
+.footer a:hover {
+  color: var(--accent-bright);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.footer a:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.62);
+  outline-offset: 2px;
 }
 
 .footer-dot {
