@@ -30,14 +30,84 @@
       </div>
     </header>
 
-    <section id="consentGate" class="consent-gate" role="alert" aria-live="polite" hidden>
-      <div class="consent-gate-copy">
-        <span id="consentGateTitle" class="consent-gate-title">Privacy &amp; terms required</span>
-        <span id="consentGateText" class="consent-gate-text">Review and agree to enable automation.</span>
+    <section id="consentView" class="consent-view" aria-labelledby="consentHeading" hidden>
+      <span id="consentKicker" class="consent-kicker">Before you start</span>
+      <h2 id="consentHeading" class="consent-heading" tabindex="-1">A quick agreement</h2>
+      <p id="consentIntro" class="consent-intro">Automation stays paused until you agree.</p>
+
+      <ul class="consent-points">
+        <li class="consent-point">
+          <span class="consent-point-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="none">
+              <rect x="4.1" y="8.4" width="11.8" height="8" rx="2" stroke="currentColor" stroke-width="1.35"/>
+              <path d="M6.7 8.4V6.25a3.3 3.3 0 0 1 6.6 0V8.4" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+              <circle cx="10" cy="12.4" r="1.15" fill="currentColor"/>
+            </svg>
+          </span>
+          <div class="consent-point-copy">
+            <span class="consent-point-title">Local only</span>
+            <span class="consent-point-text">Credentials and settings stay in this browser. Nothing is sent to the developer.</span>
+          </div>
+        </li>
+
+        <li class="consent-point">
+          <span class="consent-point-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="none">
+              <path d="M2.1 10s2.8-4.55 7.9-4.55S17.9 10 17.9 10s-2.8 4.55-7.9 4.55S2.1 10 2.1 10Z" stroke="currentColor" stroke-width="1.35"/>
+              <circle cx="10" cy="10" r="2.15" stroke="currentColor" stroke-width="1.35"/>
+            </svg>
+          </span>
+          <div class="consent-point-copy">
+            <span class="consent-point-title">Portal pages only</span>
+            <span class="consent-point-text">Works only on VU Wi-Fi login, keepalive, and terms screens. No tracking or history.</span>
+          </div>
+        </li>
+
+        <li class="consent-point">
+          <span class="consent-point-icon" aria-hidden="true">
+            <svg viewBox="0 0 20 20" fill="none">
+              <path d="M4 6.25h12M4 10h12M4 13.75h12" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/>
+              <circle cx="7.5" cy="6.25" r="1.5" fill="currentColor" stroke="currentColor" stroke-width="1.1"/>
+              <circle cx="12.75" cy="13.75" r="1.5" fill="currentColor" stroke="currentColor" stroke-width="1.1"/>
+            </svg>
+          </span>
+          <div class="consent-point-copy">
+            <span class="consent-point-title">You stay in control</span>
+            <span class="consent-point-text">Withdraw consent anytime. Uninstalling or clearing data removes everything.</span>
+          </div>
+        </li>
+      </ul>
+
+      <form id="consentForm" class="consent-form" novalidate>
+        <label class="checkbox-row consent-check" for="consentCheck">
+          <input id="consentCheck" type="checkbox">
+          <span class="checkmark" aria-hidden="true">
+            <svg viewBox="0 0 12 12" fill="none">
+              <path d="m2.4 6.15 2.25 2.2 4.95-4.7" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </span>
+          <span>I agree to the privacy summary and terms above.</span>
+        </label>
+
+        <p class="consent-fineprint">Independent utility, not affiliated with VU. Provided as-is; use it within the campus network policy.</p>
+
+        <button id="consentAccept" class="button button-primary" type="submit" disabled>I agree</button>
+        <button id="consentNotNow" class="button button-secondary" type="button">Not now</button>
+      </form>
+
+      <div id="consentReview" class="consent-review" hidden>
+        <div class="consent-status">
+          <span class="consent-status-dot" aria-hidden="true"></span>
+          <span id="consentAcceptedText">Accepted</span>
+        </div>
+        <button id="consentBack" class="button button-primary" type="button">Back to dashboard</button>
+        <button id="consentWithdraw" class="button button-danger" type="button">Withdraw consent</button>
       </div>
-      <a id="consentGateLink" class="consent-gate-link" href="privacy.html" target="_blank" rel="noopener noreferrer">Review</a>
+
+      <p id="consentMessage" class="form-message" role="status" aria-live="polite"></p>
     </section>
 
+    <div id="dashboard" hidden>
     <section class="card toggle-card" aria-labelledby="automationLabel">
       <div class="toggle-copy">
         <span id="automationLabel" class="row-title">Enable automation</span>
@@ -146,8 +216,9 @@
       <span class="footer-dot" aria-hidden="true"></span>
       <span>Stored only on this device</span>
       <span class="footer-dot" aria-hidden="true"></span>
-      <a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy &amp; Terms</a>
+      <button id="openConsent" class="footer-link" type="button">Privacy &amp; terms</button>
     </footer>
+    </div>
   </main>
 
   <script src="popup.js"></script>

@@ -5,6 +5,7 @@
   const STATUS_KEY = "vuLastStatus";
   const CONSENT_KEY = "vuConsent";
   const CONSENT_VERSION = "1.0.0";
+  const WITHDRAW_CONFIRM_MS = 4000;
 
   const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -31,6 +32,10 @@
   let saveButtonTimer = 0;
   let triggerButtonTimer = 0;
   let clockTimer = 0;
+  let withdrawTimer = 0;
+  let withdrawArmed = false;
+  let consentBusy = false;
+  let consentViewOpen = false;
 
   const elements = {};
 
@@ -64,7 +69,10 @@
     chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 
     clockTimer = window.setInterval(updateTimeLabel, 30000);
-    window.addEventListener("unload", () => window.clearInterval(clockTimer), { once: true });
+    window.addEventListener("unload", () => {
+      window.clearInterval(clockTimer);
+      window.clearTimeout(withdrawTimer);
+    }, { once: true });
   }
 
   function cacheElements() {
@@ -79,10 +87,21 @@
     elements.formMessage = document.getElementById("formMessage");
     elements.connectionBadge = document.getElementById("connectionBadge");
     elements.badgeText = document.getElementById("badgeText");
-    elements.consentGate = document.getElementById("consentGate");
-    elements.consentGateTitle = document.getElementById("consentGateTitle");
-    elements.consentGateText = document.getElementById("consentGateText");
-    elements.consentGateLink = document.getElementById("consentGateLink");
+    elements.dashboard = document.getElementById("dashboard");
+    elements.consentView = document.getElementById("consentView");
+    elements.consentKicker = document.getElementById("consentKicker");
+    elements.consentHeading = document.getElementById("consentHeading");
+    elements.consentIntro = document.getElementById("consentIntro");
+    elements.consentForm = document.getElementById("consentForm");
+    elements.consentCheck = document.getElementById("consentCheck");
+    elements.consentAccept = document.getElementById("consentAccept");
+    elements.consentNotNow = document.getElementById("consentNotNow");
+    elements.consentReview = document.getElementById("consentReview");
+    elements.consentAcceptedText = document.getElementById("consentAcceptedText");
+    elements.consentBack = document.getElementById("consentBack");
+    elements.consentWithdraw = document.getElementById("consentWithdraw");
+    elements.consentMessage = document.getElementById("consentMessage");
+    elements.openConsent = document.getElementById("openConsent");
     elements.statusReadout = document.getElementById("statusReadout");
     elements.statusText = document.getElementById("statusText");
     elements.lastUpdated = document.getElementById("lastUpdated");
@@ -109,6 +128,18 @@
 
     elements.togglePassword.addEventListener("click", togglePasswordVisibility);
     elements.triggerButton.addEventListener("click", () => void triggerLogin());
+    elements.consentForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      void acceptConsent();
+    });
+    elements.consentCheck.addEventListener("change", () => {
+      clearConsentMessage();
+      syncConsentAcceptState();
+    });
+    elements.consentNotNow.addEventListener("click", closePopup);
+    elements.consentBack.addEventListener("click", backToDashboard);
+    elements.consentWithdraw.addEventListener("click", () => void withdrawConsent());
+    elements.openConsent.addEventListener("click", openConsentReview);
   }
 
   async function saveCredentials() {
@@ -199,11 +230,12 @@
   function showFormMessage(message, tone) {
     elements.formMessage.textContent = message;
     elements.formMessage.classList.toggle("is-success", tone === "success");
+    elements.formMessage.classList.toggle("is-warning", tone === "warning");
   }
 
   function clearFormMessage() {
     elements.formMessage.textContent = "";
-    elements.formMessage.classList.remove("is-success");
+    elements.formMessage.classList.remove("is-success", "is-warning");
     elements.saveButton.classList.remove("is-error");
   }
 
@@ -216,17 +248,35 @@
 
   function renderConsent() {
     const locked = !consent.accepted;
+    const reviewing = consent.accepted && consentViewOpen;
+    const visible = locked || reviewing;
 
     document.body.classList.toggle("is-consent-locked", locked);
-    elements.consentGate.hidden = !locked;
+    document.body.classList.toggle("is-consent-view", visible);
 
-    if (locked) {
-      elements.consentGateTitle.textContent = consent.outdated
-        ? "Privacy & terms updated"
-        : "Privacy & terms required";
-      elements.consentGateText.textContent = consent.outdated
-        ? "Review the updated terms to keep automation active."
-        : "Review and agree to enable automation.";
+    elements.consentView.hidden = !visible;
+    elements.dashboard.hidden = visible;
+    elements.consentForm.hidden = reviewing;
+    elements.consentReview.hidden = !reviewing;
+    resetWithdrawButton();
+
+    if (reviewing) {
+      elements.consentKicker.textContent = "Privacy & terms";
+      elements.consentHeading.textContent = "Your agreement";
+      elements.consentIntro.textContent = "Withdrawing pauses automation. Saved credentials stay on this device.";
+      elements.consentAcceptedText.textContent = formatAcceptedConsent(consent);
+    } else if (consent.outdated) {
+      elements.consentKicker.textContent = "Action needed";
+      elements.consentHeading.textContent = "Terms updated";
+      elements.consentIntro.textContent = "The summary changed. Agree again to keep automation active.";
+      elements.consentCheck.checked = false;
+      syncConsentAcceptState();
+    } else {
+      elements.consentKicker.textContent = "Before you start";
+      elements.consentHeading.textContent = "A quick agreement";
+      elements.consentIntro.textContent = "Automation stays paused until you agree.";
+      elements.consentCheck.checked = false;
+      syncConsentAcceptState();
     }
 
     elements.enableToggle.disabled = locked;
@@ -237,6 +287,160 @@
     elements.saveButton.disabled = locked;
 
     syncTriggerButtonState();
+  }
+
+  function openConsentReview() {
+    if (!consent.accepted) return;
+
+    consentViewOpen = true;
+    clearConsentMessage();
+    renderConsent();
+    elements.consentHeading.focus({ preventScroll: true });
+  }
+
+  function backToDashboard() {
+    if (!consent.accepted) return;
+
+    consentViewOpen = false;
+    clearConsentMessage();
+    renderConsent();
+    elements.openConsent.focus({ preventScroll: true });
+  }
+
+  function closePopup() {
+    try {
+      window.close();
+    } catch {
+      // The popup can only be closed by Chrome; leaving it open is harmless.
+    }
+  }
+
+  async function acceptConsent() {
+    if (consentBusy || !elements.consentCheck.checked) {
+      return;
+    }
+
+    const payload = {
+      accepted: true,
+      version: CONSENT_VERSION,
+      acceptedAt: Date.now()
+    };
+
+    clearConsentMessage();
+    setConsentBusy(true);
+
+    const saved = await storageSet({ [CONSENT_KEY]: payload });
+    setConsentBusy(false);
+
+    if (!saved) {
+      showConsentMessage("Could not save your acceptance. Try again.", "error");
+      return;
+    }
+
+    consent = normalizeConsent(payload);
+    consentViewOpen = false;
+    renderConsent();
+
+    await ensureDefaultSettings();
+    showFormMessage("Agreement saved. Automation is ready.", "success");
+    void refreshActiveTab();
+  }
+
+  async function withdrawConsent() {
+    if (!consent.accepted || consentBusy) {
+      return;
+    }
+
+    if (!withdrawArmed) {
+      withdrawArmed = true;
+      elements.consentWithdraw.textContent = "Click again to confirm";
+      elements.consentWithdraw.classList.add("is-confirming");
+      showConsentMessage("Withdrawing pauses automation. Click again to confirm.", "warning");
+
+      window.clearTimeout(withdrawTimer);
+      withdrawTimer = window.setTimeout(cancelWithdrawConfirmation, WITHDRAW_CONFIRM_MS);
+      return;
+    }
+
+    window.clearTimeout(withdrawTimer);
+    withdrawArmed = false;
+    elements.consentWithdraw.disabled = true;
+
+    const removed = await storageRemove(CONSENT_KEY);
+    elements.consentWithdraw.disabled = false;
+
+    if (!removed) {
+      resetWithdrawButton();
+      showConsentMessage("Could not withdraw consent. Try again.", "error");
+      return;
+    }
+
+    consent = normalizeConsent(null);
+    consentViewOpen = false;
+    resetWithdrawButton();
+    renderConsent();
+    showConsentMessage("Consent withdrawn. Automation is paused.", "warning");
+    elements.consentCheck.focus({ preventScroll: true });
+  }
+
+  function resetWithdrawButton() {
+    window.clearTimeout(withdrawTimer);
+    withdrawTimer = 0;
+    withdrawArmed = false;
+
+    if (!elements.consentWithdraw) {
+      return;
+    }
+
+    elements.consentWithdraw.textContent = "Withdraw consent";
+    elements.consentWithdraw.classList.remove("is-confirming");
+  }
+
+  function cancelWithdrawConfirmation() {
+    resetWithdrawButton();
+
+    if (consent.accepted) {
+      clearConsentMessage();
+    }
+  }
+
+  function setConsentBusy(value) {
+    consentBusy = value;
+    elements.consentAccept.textContent = value ? "Saving…" : "I agree";
+    elements.consentAccept.setAttribute("aria-busy", String(value));
+    elements.consentCheck.disabled = value;
+    elements.consentNotNow.disabled = value;
+    syncConsentAcceptState();
+  }
+
+  function syncConsentAcceptState() {
+    elements.consentAccept.disabled = consentBusy || !elements.consentCheck.checked;
+  }
+
+  function showConsentMessage(message, tone) {
+    elements.consentMessage.textContent = message;
+    elements.consentMessage.classList.toggle("is-success", tone === "success");
+    elements.consentMessage.classList.toggle("is-warning", tone === "warning");
+  }
+
+  function clearConsentMessage() {
+    elements.consentMessage.textContent = "";
+    elements.consentMessage.classList.remove("is-success", "is-warning");
+  }
+
+  function formatAcceptedConsent(record) {
+    const version = record.version || CONSENT_VERSION;
+    const date = new Date(Number(record.acceptedAt));
+
+    if (Number.isNaN(date.getTime())) {
+      return `Accepted · v${version}`;
+    }
+
+    return `Accepted ${date.toLocaleDateString(undefined, {
+      day: "numeric",
+      month: "short",
+      year: "numeric"
+    })} · v${version}`;
   }
 
   function syncTriggerButtonState() {
@@ -428,6 +632,7 @@
     if (changes[CONSENT_KEY]) {
       const wasAccepted = consent.accepted;
       consent = normalizeConsent(changes[CONSENT_KEY].newValue);
+      consentViewOpen = false;
       renderConsent();
 
       if (!wasAccepted && consent.accepted) {
@@ -435,7 +640,7 @@
         showFormMessage("Privacy & terms accepted. Automation is ready.", "success");
         void refreshActiveTab();
       } else if (wasAccepted && !consent.accepted) {
-        showFormMessage("Consent withdrawn. Automation is paused.", "error");
+        showConsentMessage("Consent withdrawn. Automation is paused.", "warning");
       }
     }
 
@@ -617,6 +822,22 @@
     return new Promise((resolve) => {
       try {
         chrome.storage.local.set(value, () => {
+          if (chrome.runtime.lastError) {
+            resolve(false);
+            return;
+          }
+          resolve(true);
+        });
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  function storageRemove(key) {
+    return new Promise((resolve) => {
+      try {
+        chrome.storage.local.remove(key, () => {
           if (chrome.runtime.lastError) {
             resolve(false);
             return;
